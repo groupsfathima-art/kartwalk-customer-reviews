@@ -267,20 +267,22 @@ init().catch(console.error);
 function validProxy(req) {
   if (!SECRET) return false;
 
+  const signature = String(req.query.signature || "");
+  if (!/^[a-f0-9]{64}$/i.test(signature)) return false;
+
   const q = { ...req.query };
-
-  const sig = String(q.signature || "");
-
   delete q.signature;
 
   const msg = Object.keys(q)
     .sort()
-    .map(
-      k =>
-        `${k}=${
-          Array.isArray(q[k]) ? q[k].join(",") : q[k]
-        }`
-    )
+    .map((key) => {
+      const value = q[key];
+      const normalized = Array.isArray(value)
+        ? value.join(",")
+        : String(value ?? "");
+
+      return `${key}=${normalized}`;
+    })
     .join("");
 
   const digest = crypto
@@ -288,12 +290,12 @@ function validProxy(req) {
     .update(msg)
     .digest("hex");
 
+  const signatureBuffer = Buffer.from(signature, "hex");
+  const digestBuffer = Buffer.from(digest, "hex");
+
   return (
-    sig.length === digest.length &&
-    crypto.timingSafeEqual(
-      Buffer.from(sig),
-      Buffer.from(digest)
-    )
+    signatureBuffer.length === digestBuffer.length &&
+    crypto.timingSafeEqual(signatureBuffer, digestBuffer)
   );
 }
 
