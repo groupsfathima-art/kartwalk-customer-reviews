@@ -265,24 +265,30 @@ init().catch(console.error);
 ========================================================= */
 
 function validProxy(req) {
-  if (!SECRET) return false;
+  const rawQuery = String(req.originalUrl || "").split("?")[1] || "";
+  const params = new URLSearchParams(rawQuery);
+  const signature = String(params.get("signature") || "");
 
-  const signature = String(req.query.signature || "");
-  if (!/^[a-f0-9]{64}$/i.test(signature)) return false;
+  if (!SECRET || !/^[a-f0-9]{64}$/i.test(signature)) {
+    console.warn("App proxy auth rejected", {
+      secretConfigured: Boolean(SECRET),
+      signaturePresent: Boolean(signature),
+      signatureFormatValid: /^[a-f0-9]{64}$/i.test(signature)
+    });
+    return false;
+  }
 
-  const q = { ...req.query };
-  delete q.signature;
+  params.delete("signature");
 
-  const msg = Object.keys(q)
+  const grouped = new Map();
+  for (const [key, value] of params.entries()) {
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(value);
+  }
+
+  const msg = [...grouped.entries()]
+    .map(([key, values]) => `${key}=${values.join(",")}`)
     .sort()
-    .map((key) => {
-      const value = q[key];
-      const normalized = Array.isArray(value)
-        ? value.join(",")
-        : String(value ?? "");
-
-      return `${key}=${normalized}`;
-    })
     .join("");
 
   const digest = crypto
@@ -292,11 +298,22 @@ function validProxy(req) {
 
   const signatureBuffer = Buffer.from(signature, "hex");
   const digestBuffer = Buffer.from(digest, "hex");
-
-  return (
+  const valid =
     signatureBuffer.length === digestBuffer.length &&
-    crypto.timingSafeEqual(signatureBuffer, digestBuffer)
-  );
+    crypto.timingSafeEqual(signatureBuffer, digestBuffer);
+
+  if (!valid) {
+    console.warn("App proxy signature mismatch", {
+      queryKeys: [...grouped.keys()].sort(),
+      shopPresent: grouped.has("shop"),
+      customerParamPresent: grouped.has("logged_in_customer_id"),
+      pathPrefixPresent: grouped.has("path_prefix"),
+      timestampPresent: grouped.has("timestamp"),
+      secretConfigured: Boolean(SECRET)
+    });
+  }
+
+  return valid;
 }
 
 function customerId(req) {
